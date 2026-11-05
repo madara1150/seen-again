@@ -4,7 +4,7 @@ import { isSupabaseConfigured } from '@/lib/supabase/config';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Face Visit Tracker',
+  title: 'Seen Again',
   description: 'บันทึกใบหน้าและเวลาที่พบแต่ละบุคคล พร้อมนับจำนวนครั้งที่มา',
 };
 

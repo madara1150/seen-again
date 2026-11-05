@@ -29,12 +29,14 @@ export interface FaceResult {
 interface Track {
   box: Box;
   personId: number | null;
+  /** a face on the block list: never registered, reported or photographed */
+  blocked: boolean;
   text: string;
   lastDescribed: number;
   misses: number;
 }
 
-export interface FaceLabel { box: Box; known: boolean; text: string; personId?: number }
+export interface FaceLabel { box: Box; known: boolean; text: string; personId?: number; blocked?: boolean }
 
 export interface PresentPerson { id: number; name: string; thumbPath: string | null }
 
@@ -73,6 +75,7 @@ const toVector = (d: ArrayLike<number>) => JSON.stringify(Array.from(d));
 
 export class FaceTracker {
   private known = new Map<number, Known>();
+  private blocked: Float32Array[] = [];
   private pending: Pending[] = [];
   private lastRefresh = 0;
   private tracks: Track[] = [];
@@ -96,6 +99,19 @@ export class FaceTracker {
     this.lastRefresh = Date.now();
     const { data: people, error } = await this.supabase.from('people_stats').select('id, name, thumb_path, visit_count');
     if (error) throw error;
+
+    const blocked: Float32Array[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error: e } = await this.supabase
+        .from('blocked_faces')
+        .select('embedding')
+        .order('id')
+        .range(from, from + PAGE - 1);
+      if (e) throw e;
+      for (const row of data ?? []) blocked.push(new Float32Array(JSON.parse(row.embedding)));
+      if (!data || data.length < PAGE) break;
+    }
+    this.blocked = blocked;
 
     const descriptors = new Map<number, Float32Array[]>();
     for (let from = 0; ; from += PAGE) {
@@ -130,6 +146,18 @@ export class FaceTracker {
     this.known = next;
   }
 
+  /** Drop people that were just blocked or deleted, so their faces are looked at again from scratch. */
+  async forget(ids: number[]) {
+    for (const id of ids) this.known.delete(id);
+    for (const t of this.tracks) {
+      if (t.personId != null && ids.includes(t.personId)) {
+        t.personId = null;
+        t.lastDescribed = 0;
+      }
+    }
+    await this.refresh();
+  }
+
   /**
    * Handle one frame. Faces are found every frame (cheap) and followed by box overlap;
    * the expensive descriptor is only computed for new/unknown faces and periodically for known ones.
@@ -161,7 +189,7 @@ export class FaceTracker {
       taken.add(t);
     }
     detections.forEach((d, i) => {
-      active[i] ??= { box: d.box, personId: null, text: 'ตรวจพบใบหน้า', lastDescribed: 0, misses: 0 };
+      active[i] ??= { box: d.box, personId: null, blocked: false, text: 'ตรวจพบใบหน้า', lastDescribed: 0, misses: 0 };
       active[i].box = d.box;
       active[i].misses = 0;
     });
@@ -172,15 +200,18 @@ export class FaceTracker {
     for (const t of active) if (t.personId != null && !this.known.has(t.personId)) t.personId = null;
 
     const need = active
-      .map((t, i) => (t.personId == null || now - t.lastDescribed > REDESCRIBE_MS ? i : -1))
+      .map((t, i) => ((t.personId == null && !t.blocked) || now - t.lastDescribed > REDESCRIBE_MS ? i : -1))
       .filter((i) => i >= 0);
     const described = need.length ? await describe(need.map((i) => detections[i])) : [];
 
     // identify the described faces; people held by tracks we didn't re-check stay reserved
     const { threshold } = this.settings();
+    // blocked faces are set aside before anything else; nothing about them is kept
+    const isBlocked = described.map((r) => this.blocked.length > 0 && this.bestDistance(this.blocked, r.descriptor) < threshold);
     const reserved = new Set(active.filter((t, i) => !need.includes(i) && t.personId != null).map((t) => t.personId!));
     const pairs: { k: number; p: Known; d: number }[] = [];
     described.forEach((r, k) => {
+      if (isBlocked[k]) return;
       for (const p of this.known.values()) {
         if (reserved.has(p.id)) continue;
         const d = this.bestDistance(p.descriptors, r.descriptor);
@@ -199,8 +230,12 @@ export class FaceTracker {
     described.forEach((r, k) => {
       const t = active[need[k]];
       t.lastDescribed = now;
+      t.blocked = isBlocked[k];
       const a = assigned.get(k);
-      if (a) {
+      if (t.blocked) {
+        t.personId = null;
+        t.text = 'ไม่บันทึก';
+      } else if (a) {
         t.personId = a.p.id;
         this.onSeen(a.p, r.detection.box, r.descriptor, a.d);
       } else {
@@ -222,6 +257,7 @@ export class FaceTracker {
         return { id: p.id, name: displayName(p), thumbPath: p.thumbPath };
       });
     return active.map((t) => {
+      if (t.blocked) return { box: t.box, known: false, text: t.text, blocked: true };
       const p = t.personId != null ? this.known.get(t.personId) : undefined;
       return p
         ? { box: t.box, known: true, text: `${displayName(p)} · ครั้งที่ ${p.visitNo || '…'}`, personId: p.id }
@@ -298,6 +334,13 @@ export class FaceTracker {
     const canvas = c.canvas!;
     const mean = new Float32Array(128);
     for (const d of c.descriptors) for (let i = 0; i < 128; i++) mean[i] += d[i] / c.descriptors.length;
+
+    // blocked (maybe just now, or by another camera): drop it without saving anything
+    const { data: blocked } = await this.supabase.rpc('is_blocked', { query: toVector(mean), max_distance: this.settings().threshold });
+    if (blocked) {
+      this.blocked.push(mean);
+      return;
+    }
 
     // another camera may have registered this person since our last refresh
     const { data: match } = await this.supabase

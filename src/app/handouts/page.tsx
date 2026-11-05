@@ -113,13 +113,14 @@ export default function HandoutsPage() {
       <div className="totals">
         {perItem.map((t) => (
           <div key={t.item.id} className="stat">
+            <i aria-hidden>{t.item.emoji || '📦'}</i>
             <b>{t.qty}{t.item.unit && <small> {t.item.unit}</small>}</b>
             <span>{t.item.name}</span>
           </div>
         ))}
-        <div className="stat"><b>{perPerson.length}</b><span>ผู้รับ (คน)</span></div>
-        <div className="stat"><b>{roundCount}</b><span>รอบที่แจก</span></div>
-        <div className="stat"><b>{repeat}</b><span>คนที่รับมากกว่า 1 รอบ</span></div>
+        <div className="stat"><i aria-hidden>🙋</i><b>{perPerson.length}</b><span>ผู้รับ (คน)</span></div>
+        <div className="stat"><i aria-hidden>🔁</i><b>{roundCount}</b><span>รอบที่แจก</span></div>
+        <div className="stat"><i aria-hidden>⚠️</i><b>{repeat}</b><span>คนที่รับมากกว่า 1 รอบ</span></div>
       </div>
 
       <div className="card">
@@ -199,16 +200,18 @@ const itemById = (items: Item[], id: number) => items.find((i) => i.id === id);
 function ItemsEditor({ items, onChange }: { items: Item[]; onChange: () => void }) {
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('');
+  const [emoji, setEmoji] = useState('');
   const [message, setMessage] = useState('');
 
   const add = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
     const sort = Math.max(0, ...items.map((i) => i.sort)) + 1;
-    const { error } = await getSupabase().from('items').insert({ name: name.trim(), unit: unit.trim(), sort });
+    const { error } = await getSupabase().from('items').insert({ name: name.trim(), unit: unit.trim(), emoji: emoji.trim(), sort });
     if (error) return setMessage(error.message);
     setName('');
     setUnit('');
+    setEmoji('');
     setMessage('');
     onChange();
   };
@@ -231,10 +234,11 @@ function ItemsEditor({ items, onChange }: { items: Item[]; onChange: () => void 
   return (
     <div className="card" id="items">
       <h2>รายการของที่แจก</h2>
-      <p className="note">ปุ่มในหน้ากล้องจะเรียงตามรายการนี้ รายการที่ซ่อนจะไม่แสดงปุ่ม แต่ประวัติยังอยู่</p>
+      <p className="note">ปุ่มในหน้ากล้องจะเรียงตามรายการนี้ ใส่ emoji เป็นไอคอนได้ รายการที่ซ่อนจะไม่แสดงปุ่ม แต่ประวัติยังอยู่ · สอนกล้องให้รู้จักของได้ที่หน้ากล้อง แท็บ “สอนกล้อง”</p>
       <div className="items-edit">
         {items.map((i) => (
-          <div key={`${i.id}-${i.name}-${i.unit}`} className={`row ${i.archived ? 'archived' : ''}`}>
+          <div key={`${i.id}-${i.name}-${i.unit}-${i.emoji}`} className={`row ${i.archived ? 'archived' : ''}`}>
+            <input className="emoji" defaultValue={i.emoji} placeholder="🍱" aria-label="ไอคอน" maxLength={4} onBlur={(e) => e.target.value !== i.emoji && update(i, { emoji: e.target.value.trim() })} />
             <input className="name" defaultValue={i.name} aria-label="ชื่อรายการ" onBlur={(e) => e.target.value !== i.name && update(i, { name: e.target.value.trim() })} />
             <input className="unit" defaultValue={i.unit} placeholder="หน่วย" aria-label="หน่วย" onBlur={(e) => e.target.value !== i.unit && update(i, { unit: e.target.value.trim() })} />
             <button onClick={() => update(i, { archived: !i.archived })}>{i.archived ? 'แสดง' : 'ซ่อน'}</button>
@@ -242,6 +246,7 @@ function ItemsEditor({ items, onChange }: { items: Item[]; onChange: () => void 
           </div>
         ))}
         <form className="row" onSubmit={add}>
+          <input className="emoji" value={emoji} onChange={(e) => setEmoji(e.target.value)} placeholder="🍱" aria-label="ไอคอนของรายการใหม่" maxLength={4} />
           <input className="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น ข้าวกล่อง" aria-label="ชื่อรายการใหม่" />
           <input className="unit" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="หน่วย เช่น กล่อง" aria-label="หน่วยของรายการใหม่" />
           <button className="primary" disabled={!name.trim()}>เพิ่ม</button>

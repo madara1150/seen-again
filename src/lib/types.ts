@@ -36,6 +36,7 @@ export interface Item {
   id: number;
   name: string;
   unit: string;
+  emoji: string;
   sort: number;
   archived: boolean;
 }

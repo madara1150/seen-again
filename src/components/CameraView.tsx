@@ -7,8 +7,9 @@ import HandoutPanel from './HandoutPanel';
 import PermissionGate from './PermissionGate';
 import { backendName, loadFaceApi, type FaceApi } from '@/lib/faceapi';
 import { fmtDuration, fmtTime } from '@/lib/format';
+import { ItemRecognizer, ZONES } from '@/lib/items';
 import { cameraPermission, hasConsent, listCameras, permStateForError, saveConsent, type PermState } from '@/lib/permission';
-import { readSettings } from '@/lib/settings';
+import { readSettings, type ItemZone } from '@/lib/settings';
 import { getSupabase } from '@/lib/supabase/client';
 import { useThumbUrls } from '@/lib/thumbs';
 import { FaceTracker, type Detection, type FaceLabel, type FaceResult, type PresentPerson, type TrackerEvent } from '@/lib/tracker';
@@ -16,11 +17,12 @@ import { displayName, type Person, type Visit } from '@/lib/types';
 import { useUser } from '@/lib/useUser';
 
 const FRAME_INTERVAL = 66; // cap at ~15 fps to leave the GPU some headroom
+const ITEM_INTERVAL = 250; // item recognition runs ~4 times a second
 const MAX_EVENTS = 50;
 
 interface Stats { people: number; visitsToday: number; peopleToday: number }
 
-export default function CameraView() {
+export default function CameraView({ kiosk = false }: { kiosk?: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -29,6 +31,8 @@ export default function CameraView() {
   const user = useUser();
 
   const [faceapi, setFaceapi] = useState<FaceApi | null>(null);
+  const [recognizer, setRecognizer] = useState<ItemRecognizer | null>(null);
+  const [recognizerError, setRecognizerError] = useState('');
   const [status, setStatus] = useState('กำลังโหลดโมเดล…');
   const [gate, setGate] = useState<PermState | null>(null);
   const [gateError, setGateError] = useState('');
@@ -83,6 +87,12 @@ export default function CameraView() {
     );
   }, []);
 
+  const forgetPeople = useCallback((ids: number[]) => {
+    trackerRef.current?.forget(ids).catch((e) => setError(`โหลดข้อมูลไม่สำเร็จ: ${(e as Error).message}`));
+    loadStats();
+    loadRecent();
+  }, [loadStats, loadRecent]);
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
     loadStats();
@@ -100,6 +110,22 @@ export default function CameraView() {
       })
       .catch((e) => setStatus(`โหลดโมเดลไม่สำเร็จ: ${e.message}`));
   }, []);
+
+  // item recognition model (13 MB, cached by the browser after the first load)
+  useEffect(() => {
+    if (!faceapi || !user) return;
+    let cancelled = false;
+    ItemRecognizer.load(faceapi, getSupabase())
+      .then((r) => !cancelled && setRecognizer(r))
+      .catch((e) => !cancelled && setRecognizerError((e as Error).message));
+    return () => {
+      cancelled = true;
+    };
+  }, [faceapi, user]);
+  const recognizerRef = useRef<ItemRecognizer | null>(null);
+  useEffect(() => {
+    recognizerRef.current = recognizer;
+  }, [recognizer]);
 
   const refreshCameras = useCallback(async () => {
     const list = await listCameras();
@@ -230,6 +256,7 @@ export default function CameraView() {
       }
       let frames = 0;
       let presentKey = '';
+      let lastItemStep = 0;
       let windowStart = performance.now();
       setStatus(`กำลังตรวจจับ · ${accel}`);
       while (!stopped) {
@@ -245,7 +272,12 @@ export default function CameraView() {
             const dets = await faceapi.detectAllFaces(frame, opts);
             const labels = await tracker.step(dets, describe);
             if (stopped) break;
-            draw(frame.width, frame.height, overlayRef.current!, labels, recipientRef.current);
+            const zone = readSettings().itemZone;
+            if (recognizerRef.current && t0 - lastItemStep >= ITEM_INTERVAL) {
+              lastItemStep = t0;
+              recognizerRef.current.step(frame, zone);
+            }
+            draw(frame.width, frame.height, overlayRef.current!, labels, recipientRef.current, recognizerRef.current ? zone : null);
             setInView(tracker.inView.size);
             const key = tracker.present.map((p) => `${p.id}:${p.name}:${p.thumbPath}`).join('|');
             if (key !== presentKey) {
@@ -274,60 +306,128 @@ export default function CameraView() {
     };
   }, [running, faceapi, user, loadStats]);
 
+  // keep a kiosk tablet's screen on while the camera runs
+  useEffect(() => {
+    if (!kiosk || !running || !('wakeLock' in navigator)) return;
+    let lock: WakeLockSentinel | null = null;
+    navigator.wakeLock.request('screen').then((l) => (lock = l)).catch(() => {});
+    return () => void lock?.release();
+  }, [kiosk, running]);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.().catch(() => {});
+  };
+
+  const gateView = gate && (
+    <PermissionGate state={gate} errorMessage={gateError} onRequest={requestPermission} onSkip={() => setGate(null)} />
+  );
+
+  const controls = (
+    <>
+      {cameras.length > 1 && (
+        <select
+          value={cameraId}
+          onChange={async (e) => {
+            setCameraId(e.target.value);
+            if (running) {
+              stopCamera();
+              await startCamera(e.target.value).catch((err) => setError(err.message));
+            }
+          }}
+          aria-label="เลือกกล้อง"
+        >
+          {cameras.map((c, i) => (
+            <option key={c.deviceId} value={c.deviceId}>{c.label || `กล้อง ${i + 1}`}</option>
+          ))}
+        </select>
+      )}
+      <button className={running ? '' : 'primary'} disabled={!faceapi || !user} onClick={toggleCamera}>
+        {running ? '⏹ ปิดกล้อง' : '▶ เปิดกล้อง'}
+      </button>
+    </>
+  );
+
+  const errorView = error && (
+    <p className="alert" onClick={() => setError('')}>
+      {error} <span className="note">(คลิกเพื่อปิด)</span>
+    </p>
+  );
+
+  const video = (
+    <div className="video-wrap">
+      <video ref={videoRef} autoPlay muted playsInline />
+      <canvas ref={overlayRef} />
+      {!running && (
+        <div className="placeholder">
+          <div>
+            <div className="placeholder-icon">📷</div>
+            กด “เปิดกล้อง” เพื่อเริ่มตรวจจับใบหน้า
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const panel = (
+    <HandoutPanel
+      present={present}
+      onSelect={selectRecipient}
+      recognizer={recognizer}
+      recognizerError={recognizerError}
+      cameraOn={running}
+      kiosk={kiosk}
+      onBlocked={forgetPeople}
+    />
+  );
+
+  if (kiosk) {
+    return (
+      <div className="kiosk-shell">
+        {gateView}
+        <header className="kiosk-bar">
+          <span className="brand">👀 Seen Again</span>
+          <span className={`status ${running ? 'live' : ''}`}>{status}</span>
+          <span className="spacer" />
+          {controls}
+          <button onClick={toggleFullscreen} title="เต็มจอ" aria-label="เต็มจอ">⛶</button>
+          <Link href="/" className="exit">ออก</Link>
+        </header>
+        {errorView}
+        <div className="kiosk-grid">
+          {video}
+          {panel}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
-      {gate && (
-        <PermissionGate state={gate} errorMessage={gateError} onRequest={requestPermission} onSkip={() => setGate(null)} />
-      )}
+      {gateView}
 
       <div className="toolbar-row">
         <span className={`status ${running ? 'live' : ''}`}>{status}</span>
         <span className="spacer" />
-        {cameras.length > 1 && (
-          <select
-            value={cameraId}
-            onChange={async (e) => {
-              setCameraId(e.target.value);
-              if (running) {
-                stopCamera();
-                await startCamera(e.target.value).catch((err) => setError(err.message));
-              }
-            }}
-            aria-label="เลือกกล้อง"
-          >
-            {cameras.map((c, i) => (
-              <option key={c.deviceId} value={c.deviceId}>{c.label || `กล้อง ${i + 1}`}</option>
-            ))}
-          </select>
-        )}
-        <button className="primary" disabled={!faceapi || !user} onClick={toggleCamera}>
-          {running ? 'ปิดกล้อง' : 'เปิดกล้อง'}
-        </button>
+        <Link href="/kiosk" className="button-link">🖥️ โหมดแท็บเล็ต</Link>
+        {controls}
       </div>
 
-      {error && (
-        <p className="alert" onClick={() => setError('')}>
-          {error} <span className="note">(คลิกเพื่อปิด)</span>
-        </p>
-      )}
+      {errorView}
 
       <div className="camera-layout">
         <div>
-          <div className="video-wrap">
-            <video ref={videoRef} autoPlay muted playsInline />
-            <canvas ref={overlayRef} />
-            {!running && <div className="placeholder">กด “เปิดกล้อง” เพื่อเริ่มตรวจจับใบหน้า</div>}
-          </div>
+          {video}
           <div className="stats">
-            <Stat n={stats?.people} label="บุคคลทั้งหมด" />
-            <Stat n={stats?.visitsToday} label="ครั้งที่เข้าวันนี้" />
-            <Stat n={stats?.peopleToday} label="คนที่เจอวันนี้" />
-            <Stat n={inView} label="อยู่หน้ากล้องตอนนี้" />
+            <Stat icon="👥" n={stats?.people} label="บุคคลทั้งหมด" />
+            <Stat icon="🚪" n={stats?.visitsToday} label="ครั้งที่เข้าวันนี้" />
+            <Stat icon="📅" n={stats?.peopleToday} label="คนที่เจอวันนี้" />
+            <Stat icon="👀" n={inView} label="อยู่หน้ากล้องตอนนี้" />
           </div>
         </div>
 
         <div>
-          <HandoutPanel present={present} onSelect={selectRecipient} />
+          {panel}
           <h2>เหตุการณ์ล่าสุด</h2>
           <ul className="event-log">
             {events.length === 0 && <li className="empty">ยังไม่มีเหตุการณ์</li>}
@@ -356,26 +456,37 @@ export default function CameraView() {
   );
 }
 
-function Stat({ n, label }: { n: number | undefined; label: string }) {
+function Stat({ icon, n, label }: { icon: string; n: number | undefined; label: string }) {
   return (
     <div className="stat">
+      <i aria-hidden>{icon}</i>
       <b>{n ?? '–'}</b>
       <span>{label}</span>
     </div>
   );
 }
 
-function draw(width: number, height: number, ov: HTMLCanvasElement, labels: FaceLabel[], recipient: number | null) {
+function draw(width: number, height: number, ov: HTMLCanvasElement, labels: FaceLabel[], recipient: number | null, zone: ItemZone | null) {
   ov.width = width;
   ov.height = height;
   const ctx = ov.getContext('2d')!;
   ctx.clearRect(0, 0, ov.width, ov.height);
   const fs = Math.max(14, ov.width / 40);
+  if (zone && zone !== 'full') {
+    // where the item recogniser looks
+    const [zx, zy, zw, zh] = ZONES[zone];
+    ctx.save();
+    ctx.setLineDash([12, 10]);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,.7)';
+    ctx.strokeRect(zx * width + 4, zy * height + 4, zw * width - 8, zh * height - 8);
+    ctx.restore();
+  }
   ctx.font = `600 ${fs}px system-ui, sans-serif`;
   for (const l of labels) {
     const { x, y, width, height } = l.box;
     const isRecipient = l.personId != null && l.personId === recipient;
-    const color = isRecipient ? '#3b82f6' : l.known ? '#22c55e' : '#f59e0b';
+    const color = l.blocked ? '#6b7280' : isRecipient ? '#3b82f6' : l.known ? '#22c55e' : '#f59e0b';
     ctx.strokeStyle = color;
     ctx.lineWidth = isRecipient ? 6 : 3;
     ctx.strokeRect(x, y, width, height);

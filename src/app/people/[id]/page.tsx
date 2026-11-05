@@ -6,7 +6,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { rounds, summarize } from '@/lib/handouts';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from '@/lib/format';
 import { getSupabase } from '@/lib/supabase/client';
-import { removeThumbs, useThumbUrls } from '@/lib/thumbs';
+import { BLOCK_CONFIRM, blockPeople, deletePeople } from '@/lib/people';
+import { useThumbUrls } from '@/lib/thumbs';
 import { displayName, itemLabel, type Handout, type Item, type Person, type Visit } from '@/lib/types';
 
 export default function PersonPage() {
@@ -65,12 +66,23 @@ export default function PersonPage() {
   };
 
   const remove = async () => {
-    if (!confirm(`ลบ ${displayName(person)} และประวัติทั้งหมด? ไม่สามารถย้อนกลับได้`)) return;
-    const paths = [person.thumb_path, ...visits.map((v) => v.thumb_path)];
-    const { error } = await getSupabase().from('people').delete().eq('id', id);
-    if (error) return setError(error.message);
-    await removeThumbs(paths);
-    router.replace('/people');
+    if (!confirm(`ลบ ${displayName(person)} พร้อมรูป ประวัติการมา และประวัติการรับของทั้งหมด? ไม่สามารถย้อนกลับได้\n(ถ้าคนนี้มาหน้ากล้องอีก จะถูกบันทึกเป็นคนใหม่ ถ้าไม่ต้องการให้บันทึกอีก ให้ใช้ “บล็อก”)`)) return;
+    try {
+      await deletePeople([id]);
+      router.replace('/people');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const block = async () => {
+    if (!confirm(`${displayName(person)}: ${BLOCK_CONFIRM}`)) return;
+    try {
+      await blockPeople([id]);
+      router.replace('/people');
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const merge = async () => {
@@ -204,7 +216,8 @@ export default function PersonPage() {
           </>
         )}
         <span className="spacer" />
-        <button className="danger" onClick={remove}>ลบบุคคลนี้</button>
+        <button onClick={block} title="ลบข้อมูลทั้งหมด และไม่บันทึกคนนี้อีก">🚫 บล็อก (ห้ามเก็บข้อมูล)</button>
+        <button className="danger" onClick={remove}>🗑️ ลบบุคคลนี้</button>
       </div>
     </>
   );

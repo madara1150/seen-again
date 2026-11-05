@@ -1,7 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { DEFAULT_SETTINGS, useSettings } from '@/lib/settings';
+import BlockedList from '@/components/BlockedList';
+import { ZONE_LABELS } from '@/lib/items';
+import { DEFAULT_SETTINGS, useSettings, type ItemZone } from '@/lib/settings';
 import { getSupabase } from '@/lib/supabase/client';
 import { FACES_BUCKET } from '@/lib/supabase/config';
 import { removeThumbs } from '@/lib/thumbs';
@@ -83,6 +85,29 @@ export default function SettingsPage() {
           />
         </label>
       </div>
+
+      <div className="card settings">
+        <h2>การแจกของ (เก็บไว้ในเครื่องนี้)</h2>
+        <label className="check">
+          <input type="checkbox" checked={settings.autoRecord} onChange={(e) => set({ autoRecord: e.target.checked })} />
+          บันทึกการแจกเองเมื่อกล้องจำของได้ (ต้องสอนกล้องก่อน ที่หน้ากล้อง แท็บ “สอนกล้อง”)
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={settings.sound} onChange={(e) => set({ sound: e.target.checked })} />
+          เปิดเสียง: ดังติ๊งเมื่อบันทึก และดังเตือนเมื่อคนเดิมกลับมารับซ้ำ
+        </label>
+        <label>
+          โซนที่กล้องดูของ
+          <select value={settings.itemZone} onChange={(e) => set({ itemZone: e.target.value as ItemZone })}>
+            {(Object.keys(ZONE_LABELS) as ItemZone[]).map((z) => (
+              <option key={z} value={z}>{ZONE_LABELS[z]}</option>
+            ))}
+          </select>
+          <span className="note">ถ้าตั้งเป็นส่วนหนึ่งของภาพ จะมีกรอบเส้นประบนวิดีโอ ควรเป็นจุดที่ยื่นของให้ผู้รับ</span>
+        </label>
+      </div>
+
+      <BlockedList />
 
       <div className="card settings">
         <h2>บัญชี</h2>

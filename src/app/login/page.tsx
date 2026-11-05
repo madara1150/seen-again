@@ -54,7 +54,8 @@ export default function LoginPage() {
   return (
     <div className="login">
       <form className="card" onSubmit={submit}>
-        <h1>Face Visit Tracker</h1>
+        <div className="login-logo" aria-hidden>👀</div>
+        <h1>Seen Again</h1>
         <p className="note">{mode === 'signin' ? 'เข้าสู่ระบบเพื่อใช้งาน' : 'สร้างบัญชีใหม่'}</p>
         <label>
           อีเมล

@@ -11,9 +11,25 @@ export interface Settings {
   minFace: number;
   /** label stored on each visit, to tell cameras apart */
   cameraName: string;
+  /** part of the frame watched for handed-out items */
+  itemZone: ItemZone;
+  /** record a handout when the camera recognises an item */
+  autoRecord: boolean;
+  /** beep on each record, warning tone for repeat takers */
+  sound: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { threshold: 0.5, gapMinutes: 5, minFace: 80, cameraName: '' };
+export type ItemZone = 'full' | 'center' | 'bottom' | 'left' | 'right';
+
+export const DEFAULT_SETTINGS: Settings = {
+  threshold: 0.5,
+  gapMinutes: 5,
+  minFace: 80,
+  cameraName: '',
+  itemZone: 'center',
+  autoRecord: true,
+  sound: true,
+};
 
 const KEY = 'ft-settings';
 const listeners = new Set<() => void>();

@@ -29,8 +29,12 @@ device — only a 128-number face descriptor, a small thumbnail and timestamps a
 - **Per-person insights** — visit count, first/last seen, average gap, time on camera, busiest hours and weekdays
 - **Visit history** — every visit numbered, with its thumbnail and the camera that saw it
 - **Multiple cameras** — any number of devices share one face database; duplicates across cameras are avoided
-- **Hand-outs** — for a food stall or giveaway: one tap records what the person in front of the camera received, with a warning if they already came today
-- **Tidy-up tools** — rename people, merge duplicates, delete a person or everything
+- **Hand-outs** — for a food stall or giveaway: records what the person in front of the camera received, with a warning sound if they already came today
+- **Item recognition** — teach the camera what each item looks like and it records hand-outs on its own (MobileNet v2 + k-nearest-neighbours, in the browser)
+- **Training page** — enrol a face from all around (straight, left, right, up, down) as a named person or straight onto the block list, and teach items from every side
+- **Tablet mode** — a full-screen hand-out station at `/kiosk` with big buttons that keeps the screen awake
+- **Tidy-up tools** — rename people, merge duplicates, delete one person, several at once, or everything
+- **Block list** — someone who asks not to be recorded is blocked: all their data is deleted and the cameras skip their face from then on
 - **Private by default** — per-user Row Level Security, private image storage with short-lived signed URLs
 - **Camera permission page** — clear guidance for every browser and OS when access is blocked
 
@@ -181,6 +185,45 @@ Track how much was given out, who took what, and when.
 
 Items that were already handed out cannot be deleted — hide them instead, and their history stays.
 
+### 🎓 Training page (`/train`)
+
+**👤 Faces.** One person stands alone in front of the camera and follows the prompts: look straight, turn left,
+turn right, tilt up, tilt down. Head pose is measured from the face landmarks and a view is kept only when the head
+is in the asked pose; the ring around the face lights up as each angle is done (up/down can be skipped). Then:
+
+- **💾 Save as person** (name optional) — a face already known gets the new angles added instead of a duplicate.
+- **🚫 Block this face** — no photo, name or time is stored; only the descriptors go on the block list. If the face
+  was already stored, that record is deleted.
+
+**📦 Items.** Pick an item or create one right there, capture the empty zone once (15 views), then press start and
+turn the item slowly — up, down, all sides, near and far. Only views that differ from those already stored count,
+and a *“turn to a new angle”* prompt appears when you hold one angle too long. It stops at 30 angles; step 4 shows
+what the camera now thinks it sees. Hold the item so it nearly fills the dashed frame — a small item in a large
+frame cannot be told apart from the empty scene, so the default frame is the centre of the picture.
+
+### 🧠 Teach the camera your items
+
+Instead of tapping, the camera can recognise what is handed over.
+
+1. On the camera page open the **สอนกล้อง** (Teach) tab and pick the zone to watch, e.g. the counter at the bottom
+   of the picture (shown as a dashed frame on the video).
+2. **Empty scene first:** with nothing held in the zone, press and hold 📸 next to *ฉากว่าง* for ~5 seconds.
+3. For each item, hold it in the zone and press and hold 📸 while turning it — about 20 samples, from several
+   angles and distances, with and without people around.
+4. Back on the hand-out tab, the strip shows what the camera sees. With **อัตโนมัติ** (auto) on, an item seen
+   steadily for ~0.75 s is recorded for the selected person; the same item is recorded again only after the zone
+   has been empty for ~2 s. **Undo** fixes a wrong guess.
+
+Samples are stored per account in `item_samples`, so every camera on the account shares them. Recognition works
+best when items look clearly different (a rice box vs. a water bottle) and the lighting matches the teaching.
+The model (~13 MB) is downloaded by `npm install` and cached by the browser after the first load.
+
+### 🖥️ Tablet mode
+
+Open **โหมดแท็บเล็ต** from the camera page (or `/kiosk`) on an iPad or phone at the counter: video and the hand-out
+panel only, extra-large buttons, ⛶ for full screen, and the screen stays awake while the camera runs.
+Sounds (a chime when recorded, a buzz for repeat takers) can be turned off in Settings.
+
 ## 🗂️ Project structure
 
 ```
@@ -188,16 +231,20 @@ src/
   proxy.ts                  Session refresh; signed-out visitors go to /login
   app/                      Pages: camera (/), /people, /people/[id], /history, /settings, /login
   components/CameraView     Camera, detection loop and permission screens
-  components/HandoutPanel   Hand-out buttons next to the camera
+  components/HandoutPanel   Hand-out buttons and the teach tab next to the camera
+  app/kiosk/                Full-screen tablet station
+  app/train/                Training: FaceTrainer (guided face angles), ItemTrainer (item from every side)
+  lib/pose.ts               Head pose from face landmarks
+  lib/items.ts              Item recognition (MobileNet v2 embeddings + k-NN)
   app/handouts/             Daily hand-out summary, CSV export, item list
   lib/tracker.ts            Face tracking, matching, registration and visit reporting
   lib/supabase/             Browser/server clients and the /supabase proxy config
 supabase/migrations/        Schema, RLS policies, SQL functions, storage bucket
-scripts/copy-models.mjs     Copies face-api models into public/models on npm install
+scripts/copy-models.mjs     Puts face-api models and MobileNet v2 into public/models on npm install
 ```
 
-**Database:** `people`, `face_descriptors` (`vector(128)`, HNSW index), `visits`, `items`, `handouts`, plus the views
-`people_stats` and `visits_numbered`, and the functions `match_face`, `record_sighting` and `merge_people`.
+**Database:** `people`, `face_descriptors` (`vector(128)`, HNSW index), `visits`, `items`, `handouts`, `item_samples`, `blocked_faces`, plus the views
+`people_stats` and `visits_numbered`, and the functions `match_face`, `record_sighting`, `merge_people`, `block_people` and `is_blocked`.
 
 ## 🔒 Privacy
 
@@ -206,12 +253,18 @@ Face data that identifies people is **sensitive personal data** under laws such 
 
 - Put up a clear notice that faces are recorded, why, and who is responsible, and obtain consent where required.
 - Limit access — disable sign-ups and use a strong password.
-- Delete what you no longer need: per person on their page, or everything on the Settings page.
+- Delete what you no longer need: on a person's page, several people at once with **☑️ เลือก** (Select) on the
+  People page, or everything on the Settings page. Deleting removes their photos, visits and hand-outs.
+- **Block** people who do not want to be recorded — from the camera panel (🚫 next to the recipient), their page, or
+  the People page. Their name, photos, visits and hand-outs are deleted at once; only their face descriptors (numbers,
+  no image) stay on the block list so every camera recognises and skips them, shown as a grey “ไม่บันทึก” box.
+  Settings → *บุคคลที่บล็อก* lists blocks by date and can lift them.
 
 ## 🛠️ Built with
 
 [Next.js](https://nextjs.org) ·
 [TypeScript](https://www.typescriptlang.org) ·
 [@vladmandic/face-api](https://github.com/vladmandic/face-api) ·
+[MobileNet v2](https://github.com/tensorflow/tfjs-models/tree/master/mobilenet) ·
 [Supabase](https://supabase.com) (Postgres, pgvector, Auth, Storage) ·
 [Tailscale](https://tailscale.com) / [Netlify](https://netlify.com)
