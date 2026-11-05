@@ -29,6 +29,7 @@ device — only a 128-number face descriptor, a small thumbnail and timestamps a
 - **Per-person insights** — visit count, first/last seen, average gap, time on camera, busiest hours and weekdays
 - **Visit history** — every visit numbered, with its thumbnail and the camera that saw it
 - **Multiple cameras** — any number of devices share one face database; duplicates across cameras are avoided
+- **Hand-outs** — for a food stall or giveaway: one tap records what the person in front of the camera received, with a warning if they already came today
 - **Tidy-up tools** — rename people, merge duplicates, delete a person or everything
 - **Private by default** — per-user Row Level Security, private image storage with short-lived signed URLs
 - **Camera permission page** — clear guidance for every browser and OS when access is blocked
@@ -165,6 +166,21 @@ Adjusted per device on the **Settings** page.
 **Multiple cameras:** open the site on each device, sign in with the same account and give each a
 camera name. They all share one face database.
 
+## 🍱 Hand-outs (food stall, giveaways)
+
+Track how much was given out, who took what, and when.
+
+1. On **Hand-outs → Items**, add what you give out with a unit, e.g. *Rice box / box*, *Water / bottle*.
+2. On the camera page, the **Hand out** panel picks the closest recognised face (outlined in blue).
+   With several people in view, tap a name to choose another.
+3. Tap an item button to record **+1** for that person. **Undo** removes the last tap.
+4. The panel shows what the person already received today. Taps less than 5 minutes apart count as
+   one round; a red tag means they are back for another round.
+5. The **Hand-outs** page shows, for any day: totals per item, hand-outs per hour, what each person
+   received and how many rounds, the full log (with delete), and a **CSV** download for Excel.
+
+Items that were already handed out cannot be deleted — hide them instead, and their history stays.
+
 ## 🗂️ Project structure
 
 ```
@@ -172,13 +188,15 @@ src/
   proxy.ts                  Session refresh; signed-out visitors go to /login
   app/                      Pages: camera (/), /people, /people/[id], /history, /settings, /login
   components/CameraView     Camera, detection loop and permission screens
+  components/HandoutPanel   Hand-out buttons next to the camera
+  app/handouts/             Daily hand-out summary, CSV export, item list
   lib/tracker.ts            Face tracking, matching, registration and visit reporting
   lib/supabase/             Browser/server clients and the /supabase proxy config
 supabase/migrations/        Schema, RLS policies, SQL functions, storage bucket
 scripts/copy-models.mjs     Copies face-api models into public/models on npm install
 ```
 
-**Database:** `people`, `face_descriptors` (`vector(128)`, HNSW index), `visits`, plus the views
+**Database:** `people`, `face_descriptors` (`vector(128)`, HNSW index), `visits`, `items`, `handouts`, plus the views
 `people_stats` and `visits_numbered`, and the functions `match_face`, `record_sighting` and `merge_people`.
 
 ## 🔒 Privacy

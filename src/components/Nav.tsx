@@ -6,6 +6,7 @@ import { getSupabase } from '@/lib/supabase/client';
 
 const LINKS = [
   { href: '/', label: 'กล้อง' },
+  { href: '/handouts', label: 'การแจก' },
   { href: '/people', label: 'บุคคล' },
   { href: '/history', label: 'ประวัติการเข้า' },
   { href: '/settings', label: 'ตั้งค่า' },

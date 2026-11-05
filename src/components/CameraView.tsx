@@ -3,6 +3,7 @@
 import type { FaceDetection } from '@vladmandic/face-api';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import HandoutPanel from './HandoutPanel';
 import PermissionGate from './PermissionGate';
 import { backendName, loadFaceApi, type FaceApi } from '@/lib/faceapi';
 import { fmtDuration, fmtTime } from '@/lib/format';
@@ -10,7 +11,7 @@ import { cameraPermission, hasConsent, listCameras, permStateForError, saveConse
 import { readSettings } from '@/lib/settings';
 import { getSupabase } from '@/lib/supabase/client';
 import { useThumbUrls } from '@/lib/thumbs';
-import { FaceTracker, type Detection, type FaceLabel, type FaceResult, type TrackerEvent } from '@/lib/tracker';
+import { FaceTracker, type Detection, type FaceLabel, type FaceResult, type PresentPerson, type TrackerEvent } from '@/lib/tracker';
 import { displayName, type Person, type Visit } from '@/lib/types';
 import { useUser } from '@/lib/useUser';
 
@@ -24,6 +25,7 @@ export default function CameraView() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const trackerRef = useRef<FaceTracker | null>(null);
+  const recipientRef = useRef<number | null>(null);
   const user = useUser();
 
   const [faceapi, setFaceapi] = useState<FaceApi | null>(null);
@@ -34,10 +36,15 @@ export default function CameraView() {
   const [cameraId, setCameraId] = useState('');
   const [running, setRunning] = useState(false);
   const [inView, setInView] = useState(0);
+  const [present, setPresent] = useState<PresentPerson[]>([]);
   const [events, setEvents] = useState<TrackerEvent[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [error, setError] = useState('');
   const thumbUrl = useThumbUrls(events.map((e) => e.thumbPath));
+
+  const selectRecipient = useCallback((id: number | null) => {
+    recipientRef.current = id;
+  }, []);
 
   // ---------- data ----------
   const loadStats = useCallback(async () => {
@@ -109,6 +116,7 @@ export default function CameraView() {
     ov?.getContext('2d')?.clearRect(0, 0, ov.width, ov.height);
     setRunning(false);
     setInView(0);
+    setPresent([]);
   }, []);
 
   const startCamera = useCallback(
@@ -221,6 +229,7 @@ export default function CameraView() {
         setError('เบราว์เซอร์นี้ประมวลผลด้วย CPU ทำให้ตรวจจับช้ามาก ลองเปิด “Use hardware acceleration” ในการตั้งค่าเบราว์เซอร์ หรือใช้ Chrome/Edge');
       }
       let frames = 0;
+      let presentKey = '';
       let windowStart = performance.now();
       setStatus(`กำลังตรวจจับ · ${accel}`);
       while (!stopped) {
@@ -236,8 +245,13 @@ export default function CameraView() {
             const dets = await faceapi.detectAllFaces(frame, opts);
             const labels = await tracker.step(dets, describe);
             if (stopped) break;
-            draw(frame.width, frame.height, overlayRef.current!, labels);
+            draw(frame.width, frame.height, overlayRef.current!, labels, recipientRef.current);
             setInView(tracker.inView.size);
+            const key = tracker.present.map((p) => `${p.id}:${p.name}:${p.thumbPath}`).join('|');
+            if (key !== presentKey) {
+              presentKey = key;
+              setPresent(tracker.present);
+            }
             frames++;
           } catch (e) {
             console.error(e);
@@ -313,6 +327,7 @@ export default function CameraView() {
         </div>
 
         <div>
+          <HandoutPanel present={present} onSelect={selectRecipient} />
           <h2>เหตุการณ์ล่าสุด</h2>
           <ul className="event-log">
             {events.length === 0 && <li className="empty">ยังไม่มีเหตุการณ์</li>}
@@ -350,7 +365,7 @@ function Stat({ n, label }: { n: number | undefined; label: string }) {
   );
 }
 
-function draw(width: number, height: number, ov: HTMLCanvasElement, labels: FaceLabel[]) {
+function draw(width: number, height: number, ov: HTMLCanvasElement, labels: FaceLabel[], recipient: number | null) {
   ov.width = width;
   ov.height = height;
   const ctx = ov.getContext('2d')!;
@@ -359,15 +374,16 @@ function draw(width: number, height: number, ov: HTMLCanvasElement, labels: Face
   ctx.font = `600 ${fs}px system-ui, sans-serif`;
   for (const l of labels) {
     const { x, y, width, height } = l.box;
-    const color = l.known ? '#22c55e' : '#f59e0b';
+    const isRecipient = l.personId != null && l.personId === recipient;
+    const color = isRecipient ? '#3b82f6' : l.known ? '#22c55e' : '#f59e0b';
     ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = isRecipient ? 6 : 3;
     ctx.strokeRect(x, y, width, height);
     const tw = ctx.measureText(l.text).width + 12;
     const ty = y > fs + 8 ? y - fs - 8 : y + height;
     ctx.fillStyle = color;
     ctx.fillRect(x - 1.5, ty, tw, fs + 8);
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = isRecipient ? '#fff' : '#000';
     ctx.fillText(l.text, x + 5, ty + fs + 1);
   }
 }

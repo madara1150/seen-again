@@ -3,10 +3,11 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { rounds, summarize } from '@/lib/handouts';
 import { fmtDate, fmtDateTime, fmtDuration, fmtTime } from '@/lib/format';
 import { getSupabase } from '@/lib/supabase/client';
 import { removeThumbs, useThumbUrls } from '@/lib/thumbs';
-import { displayName, type Person, type Visit } from '@/lib/types';
+import { displayName, itemLabel, type Handout, type Item, type Person, type Visit } from '@/lib/types';
 
 export default function PersonPage() {
   const id = Number(useParams<{ id: string }>().id);
@@ -14,6 +15,8 @@ export default function PersonPage() {
   const [person, setPerson] = useState<Person | null>(null);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [others, setOthers] = useState<Person[]>([]);
+  const [handouts, setHandouts] = useState<Handout[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
   const [name, setName] = useState('');
   const nameLoadedFor = useRef<number | null>(null);
   const [mergeTarget, setMergeTarget] = useState('');
@@ -23,10 +26,12 @@ export default function PersonPage() {
 
   const load = useCallback(async () => {
     const supabase = getSupabase();
-    const [p, v, o] = await Promise.all([
+    const [p, v, o, h, i] = await Promise.all([
       supabase.from('people').select('*').eq('id', id).maybeSingle(),
       supabase.from('visits_numbered').select('*').eq('person_id', id).order('started_at'),
       supabase.from('people').select('id, name').neq('id', id).order('last_seen', { ascending: false }),
+      supabase.from('handouts').select('*').eq('person_id', id).order('created_at', { ascending: false }).limit(500),
+      supabase.from('items').select('*').order('sort').order('id'),
     ]);
     if (p.error || v.error) return setError((p.error ?? v.error)!.message);
     if (!p.data) return setNotFound(true);
@@ -38,6 +43,8 @@ export default function PersonPage() {
     }
     setVisits(v.data as Visit[]);
     setOthers((o.data ?? []) as Person[]);
+    setHandouts((h.data ?? []) as Handout[]);
+    setItems((i.data ?? []) as Item[]);
   }, [id]);
 
   useEffect(() => {
@@ -157,6 +164,31 @@ export default function PersonPage() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="card">
+        <h2>การรับของ{handouts.length > 0 && <span className="note"> · {rounds(handouts).length} รอบ · รวม {summarize(handouts, items)}</span>}</h2>
+        {handouts.length === 0 ? (
+          <p className="empty">ยังไม่เคยรับของ</p>
+        ) : (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr><th>วันที่</th><th>เวลา</th><th>รายการ</th><th>กล้อง</th></tr>
+              </thead>
+              <tbody>
+                {handouts.map((h) => (
+                  <tr key={h.id}>
+                    <td>{fmtDate(h.created_at)}</td>
+                    <td>{fmtTime(h.created_at)}</td>
+                    <td>{itemLabel(items.find((i) => i.id === h.item_id), h.qty)}</td>
+                    <td>{h.camera ?? '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="row">

@@ -31,3 +31,23 @@ export interface SightingResult {
 }
 
 export const displayName = (p: Pick<Person, 'id' | 'name'>) => p.name.trim() || `บุคคล #${p.id}`;
+
+export interface Item {
+  id: number;
+  name: string;
+  unit: string;
+  sort: number;
+  archived: boolean;
+}
+
+export interface Handout {
+  id: number;
+  person_id: number;
+  item_id: number;
+  qty: number;
+  camera: string | null;
+  created_at: string;
+}
+
+export const itemLabel = (item: Pick<Item, 'name' | 'unit'> | null | undefined, qty: number) =>
+  `${item?.name ?? 'ของที่ถูกลบ'} ${qty}${item?.unit ? ` ${item.unit}` : ''}`;

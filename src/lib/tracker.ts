@@ -34,7 +34,9 @@ interface Track {
   misses: number;
 }
 
-export interface FaceLabel { box: Box; known: boolean; text: string }
+export interface FaceLabel { box: Box; known: boolean; text: string; personId?: number }
+
+export interface PresentPerson { id: number; name: string; thumbPath: string | null }
 
 export interface TrackerEvent {
   key: string;
@@ -75,6 +77,8 @@ export class FaceTracker {
   private lastRefresh = 0;
   private tracks: Track[] = [];
   inView = new Set<number>();
+  /** recognised people in the current frame, largest (closest) face first */
+  present: PresentPerson[] = [];
 
   constructor(
     private faceapi: FaceApi,
@@ -210,10 +214,17 @@ export class FaceTracker {
     });
 
     this.inView = new Set(active.filter((t) => t.personId != null).map((t) => t.personId!));
+    this.present = active
+      .filter((t) => t.personId != null && this.known.has(t.personId))
+      .sort((a, b) => b.box.width * b.box.height - a.box.width * a.box.height)
+      .map((t) => {
+        const p = this.known.get(t.personId!)!;
+        return { id: p.id, name: displayName(p), thumbPath: p.thumbPath };
+      });
     return active.map((t) => {
       const p = t.personId != null ? this.known.get(t.personId) : undefined;
       return p
-        ? { box: t.box, known: true, text: `${displayName(p)} · ครั้งที่ ${p.visitNo || '…'}` }
+        ? { box: t.box, known: true, text: `${displayName(p)} · ครั้งที่ ${p.visitNo || '…'}`, personId: p.id }
         : { box: t.box, known: false, text: t.text };
     });
   }
